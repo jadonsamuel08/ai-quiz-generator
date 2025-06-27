@@ -3,6 +3,8 @@
 <head>
     <title>AI Quiz Generator</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-ENjdO4Dr2bkBIFxQpeoA6DQD1K2k9lQ8n6Y/jp1d2LZlF4xq0o5p2F86dIHNDz0W" crossorigin="anonymous">
     <style>
         :root {
             --primary-color: #4f46e5;
@@ -382,7 +384,7 @@
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="container-fluid px-2 px-md-5">
         <h1>AI Quiz Generator</h1>
         <p class="subtitle description" style="text-align: center; color: #4f46e5; font-size: 1.15rem; margin-bottom: 2rem;">Enter your notes or upload an image to generate a quiz.</p>
         
@@ -409,18 +411,18 @@
                 </div>
 
                 <div class="input-toggle">
-                    <button type="button" class="active" data-input="text">Text Input</button>
-                    <button type="button" data-input="image">Image Upload</button>
+                    <button type="button" class="{% if input_type == 'text' %}active{% endif %}" data-input="text">Text Input</button>
+                    <button type="button" class="{% if input_type == 'image' %}active{% endif %}" data-input="image">Image Upload</button>
                 </div>
 
-                <div id="text-input" class="input-container active">
-                    <textarea name="prompt" id="prompt" placeholder="Paste your notes here... (e.g., lecture notes, textbook content, or any study material)" required></textarea>
+                <div id="text-input" class="input-container {% if input_type == 'text' %}active{% endif %}">
+                    <textarea name="prompt" id="prompt" placeholder="Paste your notes here... (e.g., lecture notes, textbook content, or any study material)" {% if input_type == 'text' %}required{% endif %}></textarea>
                     <div id="wordCount">0/10,000 words</div>
                 </div>
 
-                <div id="image-input" class="input-container">
+                <div id="image-input" class="input-container {% if input_type == 'image' %}active{% endif %}">
                     <label for="image" class="file-upload" id="dropZone">
-                        <input type="file" name="image" id="image" accept="image/*">
+                        <input type="file" name="image" id="image" accept="image/*" {% if input_type == 'image' %}required{% endif %}>
                         <div class="file-upload-label">Click to upload or drag and drop</div>
                         <p class="file-name">PNG, JPG, JPEG or GIF (max. 10MB)</p>
                         <img id="preview" class="preview-image" alt="Preview">
@@ -468,6 +470,7 @@
         </div>
     {% endif %}
 
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-qQ2iX+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
     <script>
         const textarea = document.getElementById('prompt');
         const wordCountDisplay = document.getElementById('wordCount');
@@ -627,6 +630,11 @@
 
     <footer style="margin-top: 3rem; text-align: center; color: #64748b; font-size: 1rem; padding: 1.5rem 0 0.5rem 0;">
         Turning Notes into Knowledge 📚 &mdash; Built by <a href="https://github.com/jadonsamuel08" target="_blank" style="color: #4f46e5; text-decoration: underline;">JADON</a>
+        <div class="mt-2">
+            <span class="d-inline-block align-middle">Powered by</span>
+            <img src="{{ url_for('static', filename='gemini-logo.png') }}" alt="Gemini Logo" style="height: 1.5em; vertical-align: middle; margin: 0 0.25em;">
+            <span class="d-inline-block align-middle">Gemini</span>
+        </div>
     </footer>
 </body>
 </html>

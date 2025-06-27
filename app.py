@@ -38,13 +38,15 @@ def index():
     
     if request.method == "GET":
         last_response = session.get('last_response', [])
-        return render_template("index.html", response=last_response)
+        input_type = session.get('input_type', 'text')
+        return render_template("index.html", response=last_response, input_type=input_type)
     
     try:
         question_count = int(request.form.get("question_count", 5))
         difficulty = request.form.get("difficulty", "medium")
         
         if 'image' in request.files and request.files['image'].filename:
+            session['input_type'] = 'image'
             image_file = request.files['image']
             if image_file and allowed_file(image_file.filename):
                 filename = secure_filename(image_file.filename)
@@ -55,11 +57,13 @@ def index():
                 session['last_response'] = ai_response
                 return redirect(url_for('index'))
             else:
-                return render_template("index.html", error="Invalid image file. Please upload a valid image file.", response=[])
+                session['input_type'] = 'image'
+                return render_template("index.html", error="Invalid image file. Please upload a valid image file.", response=[], input_type='image')
         else:
+            session['input_type'] = 'text'
             prompt = request.form.get("prompt", "").strip()
             if not prompt:
-                return render_template("index.html", error="Please enter some notes or upload an image.", response=[])
+                return render_template("index.html", error="Please enter some notes or upload an image.", response=[], input_type='text')
             try:
                 ai_response = quiz_ai.generate_quiz(session["session_id"], prompt, question_count, difficulty)
                 if isinstance(ai_response, str):
@@ -93,9 +97,9 @@ def index():
                 session['last_response'] = formatted_response
                 return redirect(url_for('index'))
             except Exception as e:
-                return render_template("index.html", error=f"An error occurred while generating the quiz: {str(e)}", response=[])
+                return render_template("index.html", error=f"An error occurred while generating the quiz: {str(e)}", response=[], input_type='text')
     except Exception as e:
-        return render_template("index.html", error=f"An error occurred: {str(e)}", response=[])
+        return render_template("index.html", error=f"An error occurred: {str(e)}", response=[], input_type='text')
 
 @app.route("/reset", methods=["POST"])
 def reset():
