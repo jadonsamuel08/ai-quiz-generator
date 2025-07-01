@@ -5,7 +5,8 @@ from PIL import Image
 import io
 
 # Configure Gemini
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+# genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+genai.configure(api_key=os.getenv('GEMINI_API_KEY', "AIzaSyDOcRTnNwdzSTFtxa80IyCbjQX2zO4VLJg"))
 MODEL_NAME = "models/gemini-1.5-flash"
 
 quiz_sessions = {}
