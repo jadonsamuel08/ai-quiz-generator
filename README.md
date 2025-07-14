@@ -19,7 +19,6 @@ Transform your **notes or images** into interactive multiple-choice quizzes usin
 
 ## 🖼️ Screenshots
 
-> You'll need to upload the images to your repo under `assets/screenshots/` for them to render.
 
 ### Homepage
 ![Homepage](assets/screenshots/ai-quiz1.png)
@@ -30,10 +29,10 @@ Transform your **notes or images** into interactive multiple-choice quizzes usin
 ### Text Input
 ![Text Input](assets/screenshots/ai-quiz3.png)
 
-### Image Upload
+### Quiz Output
 ![Image Upload](assets/screenshots/ai-quiz4.png)
 
-### Quiz Output
+### Check Answers
 ![Quiz Results](assets/screenshots/ai-quiz5.png)
 
 ---
