@@ -6,7 +6,7 @@ import io
 
 # Configure Gemini
 # genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-genai.configure(api_key=os.getenv('GEMINI_API_KEY', "AIzaSyDOcRTnNwdzSTFtxa80IyCbjQX2zO4VLJg"))
+genai.configure(api_key=os.getenv('GEMINI_API_KEY', "your-api-key-here"))
 MODEL_NAME = "models/gemini-1.5-flash"
 
 quiz_sessions = {}
