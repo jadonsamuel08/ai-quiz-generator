@@ -5,9 +5,8 @@ from PIL import Image
 import io
 
 # Configure Gemini
-# genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-genai.configure(api_key=os.getenv('GEMINI_API_KEY', "your-api-key-here"))
-MODEL_NAME = "models/gemini-1.5-flash"
+genai.configure(api_key=os.getenv("GEMINI_API_KEY", "your_api_key"))
+MODEL_NAME = "gemini-2.5-flash"
 
 quiz_sessions = {}
 
@@ -95,6 +94,9 @@ def generate_quiz_from_image(session_id, image_file, question_count=5, difficult
             raise ValueError("No valid questions found in response")
             
     except Exception as e:
+        print(f"ERROR in generate_quiz_from_image: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return [{
             "question": "Error generating questions from image. Please try again.",
             "options": ["Option A", "Option B", "Option C", "Option D"],
@@ -167,6 +169,9 @@ def generate_quiz(session_id, user_prompt, question_count=5, difficulty="medium"
         else:
             raise ValueError("No valid questions found in response")
     except Exception as e:
+        print(f"ERROR in generate_quiz: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return [{
             "question": "Error generating questions. Please try again.",
             "options": ["Option A", "Option B", "Option C", "Option D"],
