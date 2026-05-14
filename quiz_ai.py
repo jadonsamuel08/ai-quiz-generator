@@ -3,17 +3,130 @@ import json
 import os
 from PIL import Image
 import io
+import hashlib
+from pathlib import Path
+import time
+
+# Load .env file into environment (simple safe loader, avoids extra deps)
+def _load_local_env(path='.env'):
+    p = Path(path)
+    if not p.exists():
+        return
+    try:
+        for line in p.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            k, v = line.split('=', 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            # Only set if not already present in environment
+            if k and k not in os.environ:
+                os.environ[k] = v
+    except Exception:
+        pass
+
+_load_local_env()
 
 # Configure Gemini
 genai.configure(api_key=os.getenv("GEMINI_API_KEY", "your_api_key"))
 MODEL_NAME = "gemini-2.5-flash"
+MODEL = genai.GenerativeModel(MODEL_NAME)
 
 quiz_sessions = {}
 
+# Simple file-based cache to avoid repeated expensive model calls for the same input
+CACHE_DIR = Path(".cache_quiz")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+def _cache_path(key: str) -> Path:
+    return CACHE_DIR / f"{key}.json"
+
+def _make_cache_key(text: str, question_count: int, difficulty: str) -> str:
+    h = hashlib.sha256()
+    h.update(text.encode("utf-8"))
+    h.update(str(question_count).encode("utf-8"))
+    h.update(difficulty.encode("utf-8"))
+    return h.hexdigest()
+
+def load_cache(key: str):
+    p = _cache_path(key)
+    if p.exists():
+        try:
+            return json.loads(p.read_text())
+        except Exception:
+            return None
+    return None
+
+def save_cache(key: str, value):
+    p = _cache_path(key)
+    try:
+        p.write_text(json.dumps(value))
+    except Exception:
+        pass
+
+def compact_user_prompt(text: str, max_line_length: int = 220) -> str:
+    """Remove excess whitespace and trim overly long lines before model calls.
+
+    This keeps structured study notes compact without changing their meaning.
+    """
+    if not text:
+        return ""
+
+    compacted_lines = []
+    for raw_line in text.splitlines():
+        line = " ".join(raw_line.strip().split())
+        if not line:
+            continue
+        if len(line) > max_line_length:
+            line = line[: max_line_length - 3].rstrip() + "..."
+        compacted_lines.append(line)
+
+    return "\n".join(compacted_lines)
+
+def summarize_text(text: str, question_count: int, chunk_size: int = 3000, max_summary_chars: int = 2000):
+    """Hierarchical summarization: split long text into chunks, summarize each, then combine.
+    This reduces the final prompt size while keeping key facts for quiz generation."""
+    if not text or len(text) <= max_summary_chars:
+        return text
+    chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+    summaries = []
+    for c in chunks:
+        prompt = (
+            "Summarize the following notes into concise bullet points (2-4 sentences each)."
+            " Keep factual details and key concepts useful for writing quiz questions. Return plain text only.\n\n"
+            + c
+        )
+        try:
+            resp = MODEL.generate_content(prompt)
+            s = resp.text.strip() if resp and getattr(resp, 'text', None) else ""
+            if s.startswith("```"):
+                # remove code fence if present
+                parts = s.split("```")
+                if len(parts) >= 2:
+                    s = parts[1].strip()
+            summaries.append(s)
+        except Exception:
+            continue
+    combined = "\n\n".join([s for s in summaries if s])
+    if len(combined) > max_summary_chars:
+        # final compress
+        prompt2 = (
+            f"Compress the following summaries into a single concise summary suitable for creating {question_count} quiz questions. Return plain text only.\n\n"
+            + combined
+        )
+        try:
+            resp2 = MODEL.generate_content(prompt2)
+            combined = resp2.text.strip() if resp2 and getattr(resp2, 'text', None) else combined
+            if combined.startswith("```"):
+                combined = combined.replace("```", "").strip()
+        except Exception:
+            pass
+    return combined
+
 def start_quiz_session(session_id):
     """Start or reset a quiz session."""
-    model = genai.GenerativeModel(MODEL_NAME)
-    chat = model.start_chat(history=[])
+    chat = MODEL.start_chat(history=[])
     quiz_sessions[session_id] = chat
     return chat
 
@@ -31,57 +144,117 @@ def validate_question(q):
         return False
     return True
 
+def extract_json_array(text: str):
+    """Extract the first JSON array from a model response.
+
+    This is intentionally forgiving because medium/hard generations sometimes
+    wrap valid JSON in prose or code fences.
+    """
+    if not text:
+        raise ValueError("Empty response text")
+
+    cleaned = text.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    if cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    cleaned = cleaned.strip()
+
+    start = cleaned.find("[")
+    end = cleaned.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        candidate = cleaned[start:end + 1]
+        return json.loads(candidate)
+
+    return json.loads(cleaned)
+
+def build_quiz_prompt(notes_text: str, question_count: int, difficulty: str) -> str:
+    difficulty_instructions = {
+        "easy": (
+            "Create straightforward recall questions. Keep wording simple and the correct answer obvious from the notes."
+        ),
+        "medium": (
+            "Create questions that test understanding and application. Focus on core ideas, cause-and-effect, comparisons, and short scenarios. "
+            "Every question must be answerable directly from the notes without outside knowledge."
+        ),
+        "hard": (
+            "Create challenging but still grounded questions. Ask about relationships between concepts, implications, and careful distinctions. "
+            "Do not use trick questions, ambiguous wording, or outside knowledge."
+        ),
+    }
+
+    return f"""Create EXACTLY {question_count} multiple choice questions based on these notes.
+Return ONLY a valid JSON array and nothing else.
+
+Difficulty level: {difficulty_instructions[difficulty]}
+
+Rules:
+- Each question object must have exactly these keys: question, options, correct_answer, explanation
+- options must be an array of exactly 4 strings
+- correct_answer must be an integer from 0 to 3
+- explanation must briefly justify the correct answer using the notes
+- Do not include markdown, code fences, numbering, or commentary
+
+Example format:
+[
+  {{
+    "question": "What is the capital of France?",
+    "options": ["London", "Paris", "Berlin", "Madrid"],
+    "correct_answer": 1,
+    "explanation": "Paris is the capital city of France."
+  }}
+]
+
+Notes to create questions from:
+{notes_text}
+"""
+
+def repair_quiz_response(model, raw_text: str, question_count: int, difficulty: str):
+    """Ask the model to repair malformed output into strict JSON."""
+    repair_prompt = f"""Convert the following text into EXACTLY {question_count} valid quiz questions.
+Return ONLY a JSON array, with each item having keys question, options, correct_answer, explanation.
+Difficulty: {difficulty}
+
+Text to repair:
+{raw_text}
+"""
+    response = model.generate_content(repair_prompt)
+    if not response or not response.text:
+        raise ValueError("Empty repair response from model")
+    return extract_json_array(response.text)
+
 def generate_quiz_from_image(session_id, image_file, question_count=5, difficulty="medium"):
     """Generate multiple choice questions from an image."""
     try:
         # Read and process the image
         image = Image.open(image_file)
+        # Use shared model instance
+        model = MODEL
         
-        # Create a new model instance for image processing
-        model = genai.GenerativeModel(MODEL_NAME)
+        prompt = build_quiz_prompt("[image content supplied separately]", question_count, difficulty)
         
-        difficulty_instructions = {
-            "easy": "Create straightforward questions that test basic understanding. Use simple language and focus on key facts.",
-            "medium": "Create questions that test both understanding and application of concepts. Include some questions that require connecting ideas.",
-            "hard": "Create challenging questions that test deep understanding. Include questions that require analysis, evaluation, or synthesis of concepts."
-        }
-        
-        prompt = f"""Create EXACTLY {question_count} multiple choice questions based on the content in this image. Your response must be a valid JSON array.
-        Difficulty level: {difficulty_instructions[difficulty]}
-        
-        Each question must be an object with these exact fields:
-        - question: The question text
-        - options: An array of exactly 4 possible answers
-        - correct_answer: A number from 0 to 3 (index of correct answer)
-        - explanation: Why the correct answer is right
+        # Create cache key from image bytes + params
+        try:
+            img_bytes = io.BytesIO()
+            image.save(img_bytes, format="PNG")
+            img_hash = hashlib.sha256(img_bytes.getvalue()).hexdigest()
+            cache_key = _make_cache_key(img_hash, question_count, difficulty)
+            cached = load_cache(cache_key)
+            if cached:
+                return cached
+        except Exception:
+            cache_key = None
 
-        IMPORTANT: You MUST return EXACTLY {question_count} questions, no more and no less.
-        If you cannot generate {question_count} questions, return an error message instead.
-
-        Example response format (copy this exactly, just change the content):
-        [
-            {{
-                "question": "What is the capital of France?",
-                "options": ["London", "Paris", "Berlin", "Madrid"],
-                "correct_answer": 1,
-                "explanation": "Paris is the capital city of France."
-            }}
-        ]
-
-        Remember: Return ONLY the JSON array with EXACTLY {question_count} questions, nothing else. No additional text."""
-        
         response = model.generate_content([prompt, image])
         response_text = response.text.strip()
-        
-        # Clean the response text to ensure it's valid JSON
-        if response_text.startswith("```json"):
-            response_text = response_text[7:]
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]
-        response_text = response_text.strip()
-        
-        # Parse the JSON
-        questions = json.loads(response_text)
+
+        # Parse the JSON, repairing malformed output once if needed
+        try:
+            questions = extract_json_array(response_text)
+        except Exception:
+            questions = repair_quiz_response(model, response_text, question_count, difficulty)
         if not isinstance(questions, list):
             questions = [questions]
             
@@ -89,6 +262,8 @@ def generate_quiz_from_image(session_id, image_file, question_count=5, difficult
         valid_questions = [q for q in questions if validate_question(q)]
         
         if valid_questions:
+            if cache_key:
+                save_cache(cache_key, valid_questions)
             return valid_questions
         else:
             raise ValueError("No valid questions found in response")
@@ -107,52 +282,28 @@ def generate_quiz_from_image(session_id, image_file, question_count=5, difficult
 def generate_quiz(session_id, user_prompt, question_count=5, difficulty="medium"):
     """Generate multiple choice questions from the provided notes."""
     try:
-        # Create a new model instance
-        model = genai.GenerativeModel(MODEL_NAME)
-        difficulty_instructions = {
-            "easy": "Create straightforward questions that test basic understanding. Use simple language and focus on key facts.",
-            "medium": "Create questions that test both understanding and application of concepts. Include some questions that require connecting ideas.",
-            "hard": "Create challenging questions that test deep understanding. Include questions that require analysis, evaluation, or synthesis of concepts."
-        }
-        prompt = f"""Create EXACTLY {question_count} multiple choice questions based on these notes. Your response must be a valid JSON array.
-        Difficulty level: {difficulty_instructions[difficulty]}
-        
-        Each question must be an object with these exact fields:
-        - question: The question text
-        - options: An array of exactly 4 possible answers
-        - correct_answer: A number from 0 to 3 (index of correct answer)
-        - explanation: Why the correct answer is right
+        # Use shared model instance
+        model = MODEL
+        normalized_prompt = compact_user_prompt(user_prompt)
+        # Check cache first
+        cache_key = _make_cache_key(normalized_prompt, question_count, difficulty)
+        cached = load_cache(cache_key)
+        if cached:
+            return cached
 
-        IMPORTANT: You MUST return EXACTLY {question_count} questions, no more and no less.
-        If you cannot generate {question_count} questions, return an error message instead.
+        # If the input is moderately large, summarize it first to reduce token usage.
+        notes_text = normalized_prompt
+        if len(normalized_prompt) > 2200:
+            notes_text = summarize_text(normalized_prompt, question_count)
 
-        Example response format (copy this exactly, just change the content):
-        [
-            {{
-                "question": "What is the capital of France?",
-                "options": ["London", "Paris", "Berlin", "Madrid"],
-                "correct_answer": 1,
-                "explanation": "Paris is the capital city of France."
-            }}
-        ]
-
-        Notes to create questions from:
-        {user_prompt}
-
-        Remember: Return ONLY the JSON array with EXACTLY {question_count} questions, nothing else. No additional text."""
+        prompt = build_quiz_prompt(notes_text, question_count, difficulty)
         response = model.generate_content(prompt)
         if not response or not response.text:
             raise ValueError("Empty response from model")
-        response_text = response.text.strip()
-        if response_text.startswith("```json"):
-            response_text = response_text[7:]
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]
-        response_text = response_text.strip()
         try:
-            questions = json.loads(response_text)
-        except json.JSONDecodeError:
-            raise ValueError("Invalid JSON response from model")
+            questions = extract_json_array(response.text)
+        except Exception:
+            questions = repair_quiz_response(model, response.text, question_count, difficulty)
         if not isinstance(questions, list):
             questions = [questions]
         valid_questions = []
@@ -165,6 +316,10 @@ def generate_quiz(session_id, user_prompt, question_count=5, difficulty="medium"
                     "explanation": str(q["explanation"])
                 })
         if valid_questions:
+            try:
+                save_cache(cache_key, valid_questions)
+            except Exception:
+                pass
             return valid_questions
         else:
             raise ValueError("No valid questions found in response")
