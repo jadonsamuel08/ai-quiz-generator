@@ -17,3 +17,4 @@ venv/
 
 # Uploads and generated files
 uploads/
+.cache_quiz/
